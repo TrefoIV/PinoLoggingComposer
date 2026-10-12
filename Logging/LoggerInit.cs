@@ -11,6 +11,7 @@ namespace Shared.Logging
 	{
 		private FileInfo? _telegramTokenFile;
 		private bool _logConsole = true;
+		private string? _noConsoleLoggersPattern;
 
 		private LoggerInit(FileInfo telegramTokenFile)
 		{
@@ -37,6 +38,16 @@ namespace Shared.Logging
 			return this;
 		}
 
+		/// <summary>
+		/// Loggers whose name matches the pattern (NLog wildcards, e.g. "CCRParser-*") do not write to the console.
+		/// They still write to the log file and to Telegram, if enabled.
+		/// </summary>
+		public LoggerInit SetNoConsoleLoggers(string loggerNamePattern)
+		{
+			_noConsoleLoggersPattern = loggerNamePattern;
+			return this;
+		}
+
 		/// <param name="asyncFile">
 		/// If true, file writes happen on a background thread: loggers only enqueue the event (the queue blocks the caller when full,
 		/// so no event is lost). Useful with many threads logging to the same file. Call <see cref="LogManager.Shutdown"/> (or Flush)
@@ -47,12 +58,7 @@ namespace Shared.Logging
 
 			LoggingConfiguration lc = new();
 
-			if (_logConsole)
-			{
-				ColoredConsoleTarget ct = new();
-				lc.AddRule(NLog.LogLevel.Info, NLog.LogLevel.Fatal, ct, "*");
-			}
-
+			Target? fileTarget = null;
 			if (outFile is not null)
 			{
 
@@ -66,7 +72,7 @@ namespace Shared.Logging
 				}
 				FileTarget ct1 = new();
 				ct1.FileName = outFile.FullName;
-				Target fileTarget = ct1;
+				fileTarget = ct1;
 				if (asyncFile)
 				{
 					fileTarget = new AsyncTargetWrapper(ct1)
@@ -75,6 +81,10 @@ namespace Shared.Logging
 						OverflowAction = AsyncTargetWrapperOverflowAction.Block,
 					};
 				}
+			}
+
+			if (fileTarget is not null)
+			{
 				lc.AddRule(NLog.LogLevel.Info, NLog.LogLevel.Fatal, fileTarget, "*");
 			}
 
@@ -91,6 +101,22 @@ namespace Shared.Logging
 				};
 
 				lc.AddRule(NLog.LogLevel.Info, NLog.LogLevel.Fatal, telegramTarget, "*");
+			}
+
+			// The console rule is the last one. Rules are evaluated in order, so a Final rule without targets for the
+			// "no console" loggers placed right before it stops them from reaching the console, after they have been
+			// written to the file and to Telegram by the rules above.
+			if (_logConsole)
+			{
+				if (_noConsoleLoggersPattern is not null)
+				{
+					LoggingRule noConsole = new() { LoggerNamePattern = _noConsoleLoggersPattern, Final = true };
+					noConsole.EnableLoggingForLevels(NLog.LogLevel.Info, NLog.LogLevel.Fatal);
+					lc.LoggingRules.Add(noConsole);
+				}
+
+				ColoredConsoleTarget ct = new();
+				lc.AddRule(NLog.LogLevel.Info, NLog.LogLevel.Fatal, ct, "*");
 			}
 
 			LogManager.Configuration = lc;
